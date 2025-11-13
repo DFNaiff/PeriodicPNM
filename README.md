@@ -1,16 +1,34 @@
 # PeriodicPNM
 
-A high-performance C++/Python library for generating periodic pore network models with custom periodic Euclidean Distance Transform (EDT) implementation. Uses pybind11 for Python bindings and OpenMP for multi-threaded parallelization.
+A Python library for generating and analyzing pore network models in periodic domains.
 
-## Features
+> **⚠️ Work in Progress**: This library is under active development. Features and APIs may change.
 
-- **Periodic EDT**: Lightning-fast Euclidean distance transform with per-axis periodic boundary conditions
-- **Multi-dimensional support**: 1D, 2D, and 3D arrays
+## Overview
+
+PeriodicPNM is designed to create realistic pore network models from 3D microstructure images, with support for periodic boundary conditions. These models are essential for simulating transport phenomena (fluid flow, diffusion, etc.) in porous media such as rocks, soils, batteries, and fuel cells.
+
+The library provides high-performance tools optimized for computational efficiency using C++ implementations with Python bindings.
+
+## Current Features
+
+### Periodic Euclidean Distance Transform (EDT)
+
+The first implemented component is a high-performance periodic EDT:
+
+- **Periodic boundary support**: Per-axis control of periodic/non-periodic boundaries
+- **Multi-dimensional**: 1D, 2D, and 3D arrays
 - **High performance**: C++ implementation with OpenMP multi-threading
-- **Flexible boundary conditions**: Control periodicity independently for each axis
-- **Felzenszwalb-Huttenlocher algorithm**: Exact linear-time EDT computation
-- **Float32 precision**: Optimized for speed while maintaining sufficient accuracy
-- **Multi-core scaling**: Automatically utilizes all available CPU cores
+- **Exact algorithm**: Felzenszwalb-Huttenlocher linear-time EDT
+- **Float32 precision**: Optimized for speed with sufficient accuracy
+
+### Planned Features
+
+- Pore and throat extraction from distance transforms
+- Network connectivity analysis
+- Pore size distribution calculations
+- Network topology export for simulation tools
+- Periodic boundary handling for network generation
 
 ## Installation
 
@@ -60,19 +78,21 @@ Or build the C++ extensions manually:
 python setup.py build_ext --inplace
 ```
 
-## Usage
+## Quick Start
 
-### Basic Example
+### Using the Periodic EDT
+
+The periodic Euclidean distance transform is a fundamental building block for pore network extraction:
 
 ```python
 import numpy as np
 from periodicpnm import euclidean_distance_transform_periodic
 
-# Create a binary image (True = feature, False = background)
+# Create a binary image (True = solid, False = pore space)
 binary = np.zeros((32, 32), dtype=bool)
 binary[10:20, 10:20] = True
 
-# Compute EDT with periodic boundary conditions on both axes
+# Compute distance to nearest solid with periodic boundaries
 distance = euclidean_distance_transform_periodic(
     binary,
     periodic_axes=(True, True),
@@ -80,29 +100,20 @@ distance = euclidean_distance_transform_periodic(
 )
 ```
 
-### 3D Example with Mixed Boundaries
+### 3D Microstructure with Periodic Boundaries
 
 ```python
-# 3D volume with periodic boundaries on X and Y, but not Z
+# 3D volume with periodic boundaries in X-Y plane only
 volume = np.random.rand(64, 64, 64) > 0.7
 
 distance_3d = euclidean_distance_transform_periodic(
     volume,
-    periodic_axes=(False, True, True),  # Non-periodic Z, periodic X and Y
+    periodic_axes=(True, True, False),  # Periodic X-Y, non-periodic Z
     squared=False
 )
 ```
 
-### Squared Distance (Faster)
-
-```python
-# Get squared distances (skips sqrt computation)
-squared_distance = euclidean_distance_transform_periodic(
-    binary,
-    periodic_axes=(True, True),
-    squared=True  # Returns squared distances
-)
-```
+More features for pore network extraction coming soon!
 
 ## API Reference
 
@@ -133,29 +144,26 @@ Compute the Euclidean distance transform with optional periodic boundary conditi
 - `ValueError`: If `periodic_axes` length doesn't match array dimensions
 - `RuntimeError`: If C++ extension fails to process the array
 
-## Algorithm
+## Implementation Details
 
-The implementation uses the **Felzenszwalb-Huttenlocher (FH)** algorithm for exact linear-time EDT computation. For periodic boundaries, a **virtual domain approach** is employed:
+### Periodic EDT Algorithm
 
-1. The domain is extended to size 2n for periodic axes
-2. The FH algorithm is applied to the extended domain
-3. Results are folded back to the original periodic domain
+The periodic EDT uses the **Felzenszwalb-Huttenlocher** algorithm with a virtual domain approach:
 
-This ensures exact Euclidean distances while respecting periodic topology.
+1. Domain is extended to size 2n for periodic axes
+2. Exact linear-time EDT is computed on the extended domain
+3. Results are folded back to respect periodic topology
 
-### Complexity
+**Performance characteristics:**
+- Time complexity: O(n) per dimension, linear scaling
+- OpenMP parallelization across all major loops
+- Float32 precision (2x faster than float64, sufficient for distance fields)
 
-- **Time complexity**: O(n) per dimension, O(nd) total for d-dimensional data
-- **Space complexity**: O(n) working memory per dimension
-- **Parallelization**: O(nd/c) with c cores (near-linear scaling with OpenMP)
+### Performance Tips
 
-## Performance Tips
-
-1. **Use `squared=True`** when you don't need actual Euclidean distances (e.g., for watershed seeding or SNOW algorithm)
-2. **Multi-threading**: The implementation automatically uses all available CPU cores via OpenMP
-3. **Float32 precision**: Internally uses float32 for 2x speedup compared to float64 (sufficient accuracy for distance transforms)
-4. **Memory layout**: Ensure input arrays are C-contiguous for best performance (NumPy default)
-5. **Large arrays**: Performance scales linearly with array size and inversely with number of cores
+1. Use `squared=True` when you don't need actual Euclidean distances
+2. Multi-threading automatically uses all CPU cores via OpenMP
+3. Ensure input arrays are C-contiguous (NumPy default)
 
 ## Project Structure
 
@@ -163,11 +171,12 @@ This ensures exact Euclidean distances while respecting periodic topology.
 PeriodicPNM/
 ├── periodicpnm/              # Main package
 │   ├── __init__.py
-│   └── periodic_edt.cpp      # C++ EDT implementation with OpenMP
-├── notebooks/                # Jupyter notebooks
+│   └── periodic_edt.cpp      # C++ periodic EDT implementation
+├── notebooks/                # Jupyter notebooks for analysis and examples
 │   └── exploratory/          # Experimental notebooks (gitignored)
 ├── tests/                    # Unit tests
 ├── setup.py                  # Build configuration (pybind11)
+├── pyproject.toml            # Modern Python project metadata
 └── README.md                 # This file
 ```
 
@@ -185,12 +194,14 @@ pytest tests/
 
 ## Applications
 
-Periodic EDT is particularly useful for:
+PeriodicPNM is designed for:
 
-- **Pore network modeling**: Generating realistic pore structures with periodic boundaries
-- **Materials science**: Analyzing microstructures with periodic representative volume elements
-- **Image processing**: Distance transforms on tiling textures
-- **Computational geometry**: Distance queries on toroidal topologies
+- **Porous media simulation**: Generate network models for flow and transport simulations in rocks, soils, and membranes
+- **Battery and fuel cell research**: Analyze electrode microstructures with periodic representative volume elements
+- **Materials characterization**: Extract pore size distributions and connectivity from 3D imaging data (micro-CT, FIB-SEM)
+- **Multiphase flow modeling**: Create input for network simulators to study drainage, imbibition, and capillary phenomena
+
+The periodic boundary support enables accurate modeling of bulk material properties from small representative samples.
 
 ## License
 
@@ -204,6 +215,11 @@ If you use this library in your research, please cite:
 
 ## References
 
+### Pore Network Modeling
+- Blunt, M. J. (2001). Flow in porous media—pore-network models and multiphase flow. Current Opinion in Colloid & Interface Science, 6(3), 197-207.
+- Dong, H., & Blunt, M. J. (2009). Pore-network extraction from micro-computerized-tomography images. Physical Review E, 80(3), 036307.
+
+### Distance Transform Algorithm
 - Felzenszwalb, P. F., & Huttenlocher, D. P. (2012). Distance transforms of sampled functions. Theory of Computing, 8(1), 415-428.
 
 ## Contributing
