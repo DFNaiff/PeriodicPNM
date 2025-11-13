@@ -1,0 +1,25 @@
+# Include documentation
+include README.md
+include CLAUDE.md
+include LICENSE
+
+# Include configuration files
+include pyproject.toml
+include setup.py
+include requirements.txt
+
+# Include Cython source files
+include periodicpnm/*.pyx
+include periodicpnm/*.pxd
+
+# Include test files
+recursive-include tests *.py
+
+# Exclude build artifacts
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude *.so
+global-exclude *.c
+global-exclude *.cpp
+global-exclude __pycache__
+global-exclude .ipynb_checkpoints

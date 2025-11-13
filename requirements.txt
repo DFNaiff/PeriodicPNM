@@ -1,0 +1,14 @@
+# Core dependencies
+numpy>=1.20.0
+scipy>=1.7.0
+
+# Build dependencies
+Cython>=0.29.0
+
+# Development dependencies
+pytest>=7.0.0
+pytest-cov>=3.0.0
+
+# Notebook dependencies
+jupyter>=1.0.0
+matplotlib>=3.5.0
