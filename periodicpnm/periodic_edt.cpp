@@ -186,18 +186,18 @@ edt_2d(float32* D,
 {
     // Axis 0: lines along y, one line per x (columns)
     // Parallelize over x; each thread gets its own local buffers.
-#ifdef _OPENMP
-#pragma omp parallel
-#endif
+    #ifdef _OPENMP
+    #pragma omp parallel
+    #endif
     {
         std::vector<float32> f_line(ny);
         std::vector<float32> d_line(ny);
         std::vector<int>     v(per0 ? 2*ny : ny);
         std::vector<float32> z(per0 ? 2*ny + 1 : ny + 1);
 
-#ifdef _OPENMP
-#pragma omp for
-#endif
+        #ifdef _OPENMP
+        #pragma omp for
+        #endif
         for (int x = 0; x < nx; ++x) {
             // Gather column x into f_line
             for (int y = 0; y < ny; ++y) {
@@ -221,18 +221,18 @@ edt_2d(float32* D,
     }
 
     // Axis 1: lines along x, one line per y (rows)
-#ifdef _OPENMP
-#pragma omp parallel
-#endif
+    #ifdef _OPENMP
+    #pragma omp parallel
+    #endif
     {
         std::vector<float32> f_line(nx);
         std::vector<float32> d_line(nx);
         std::vector<int>     v(per1 ? 2*nx : nx);
         std::vector<float32> z(per1 ? 2*nx + 1 : nx + 1);
 
-#ifdef _OPENMP
-#pragma omp for
-#endif
+        #ifdef _OPENMP
+        #pragma omp for
+        #endif
         for (int y = 0; y < ny; ++y) {
             // Gather row y
             float32* row = D + y*nx;
@@ -274,18 +274,18 @@ edt_3d(float32* D,
     const int row_stride   = nx;       // stride between rows in y
 
     // ----- Axis 0: lines along z, one line per (y, x) -----
-#ifdef _OPENMP
-#pragma omp parallel
-#endif
+    #ifdef _OPENMP
+    #pragma omp parallel
+    #endif
     {
         std::vector<float32> f_line(nz);
         std::vector<float32> d_line(nz);
         std::vector<int>     v(per0 ? 2*nz : nz);
         std::vector<float32> z(per0 ? 2*nz + 1 : nz + 1);
 
-#ifdef _OPENMP
-#pragma omp for collapse(2)
-#endif
+        #ifdef _OPENMP
+        #pragma omp for collapse(2)
+        #endif
         for (int y = 0; y < ny; ++y) {
             for (int x = 0; x < nx; ++x) {
                 // Gather line along z at fixed (y, x)
@@ -312,18 +312,18 @@ edt_3d(float32* D,
     }
 
     // ----- Axis 1: lines along y, one line per (z, x) -----
-#ifdef _OPENMP
-#pragma omp parallel
-#endif
+    #ifdef _OPENMP
+    #pragma omp parallel
+    #endif
     {
         std::vector<float32> f_line(ny);
         std::vector<float32> d_line(ny);
         std::vector<int>     v(per1 ? 2*ny : ny);
         std::vector<float32> z(per1 ? 2*ny + 1 : ny + 1);
 
-#ifdef _OPENMP
-#pragma omp for collapse(2)
-#endif
+        #ifdef _OPENMP
+        #pragma omp for collapse(2)
+        #endif
         for (int z0 = 0; z0 < nz; ++z0) {
             for (int x = 0; x < nx; ++x) {
                 // Gather line along y at fixed (z, x)
@@ -350,18 +350,18 @@ edt_3d(float32* D,
     }
 
     // ----- Axis 2: lines along x, one line per (z, y) -----
-#ifdef _OPENMP
-#pragma omp parallel
-#endif
+    #ifdef _OPENMP
+    #pragma omp parallel
+    #endif
     {
         std::vector<float32> f_line(nx);
         std::vector<float32> d_line(nx);
         std::vector<int>     v(per2 ? 2*nx : nx);
         std::vector<float32> z(per2 ? 2*nx + 1 : nx + 1);
 
-#ifdef _OPENMP
-#pragma omp for collapse(2)
-#endif
+        #ifdef _OPENMP
+        #pragma omp for collapse(2)
+        #endif
         for (int z0 = 0; z0 < nz; ++z0) {
             for (int y = 0; y < ny; ++y) {
                 // Gather line along x at fixed (z, y)

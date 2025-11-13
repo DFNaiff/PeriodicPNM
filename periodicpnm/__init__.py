@@ -1,3 +1,4 @@
+# flake8: noqa
 """
 PeriodicPNM - Periodic Pore Network Model generation library
 
@@ -5,9 +6,11 @@ This package provides tools for generating periodic pore network models,
 including a high-performance periodic Euclidean Distance Transform (EDT)
 implementation using C++ with OpenMP parallelization.
 """
+from .gaussian_filter import gaussian_filter
+
 
 __version__ = "0.1.0"
-
+__all__ += ["gaussian_filter"]
 # Import main functions when the compiled extension is available
 try:
     from .periodic_edt import euclidean_distance_transform_periodic
@@ -23,4 +26,3 @@ except ImportError as e:
         "Requirements: pybind11, numpy, C++ compiler with OpenMP support",
         ImportWarning
     )
-    __all__ = []
