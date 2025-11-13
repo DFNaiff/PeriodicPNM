@@ -3,7 +3,7 @@ numpy>=1.20.0
 scipy>=1.7.0
 
 # Build dependencies
-Cython>=0.29.0
+pybind11>=2.6.0
 
 # Development dependencies
 pytest>=7.0.0
@@ -12,3 +12,8 @@ pytest-cov>=3.0.0
 # Notebook dependencies
 jupyter>=1.0.0
 matplotlib>=3.5.0
+
+# Note: C++ compiler with OpenMP support required for building
+# Linux/WSL: sudo apt-get install build-essential
+# macOS: xcode-select --install (or brew install libomp for OpenMP)
+# Windows: Visual Studio with C++ tools

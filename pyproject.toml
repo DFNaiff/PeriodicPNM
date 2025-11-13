@@ -1,18 +1,18 @@
 [build-system]
-requires = ["setuptools>=45", "wheel", "Cython>=0.29.0", "numpy>=1.20.0"]
+requires = ["setuptools>=45", "wheel", "pybind11>=2.6.0", "numpy>=1.20.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "periodicpnm"
 version = "0.1.0"
-description = "Periodic Pore Network Model generation library with custom periodic EDT"
+description = "Periodic Pore Network Model generation library with high-performance C++/OpenMP EDT"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "MIT"}
 authors = [
     {name = "Your Name", email = "your.email@example.com"}
 ]
-keywords = ["pore network", "distance transform", "periodic", "cython", "image processing"]
+keywords = ["pore network", "distance transform", "periodic", "cpp", "openmp", "image processing", "performance"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
@@ -22,7 +22,8 @@ classifiers = [
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
-    "Programming Language :: Cython",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: C++",
     "Topic :: Scientific/Engineering",
     "Topic :: Scientific/Engineering :: Image Processing",
 ]
@@ -30,13 +31,13 @@ classifiers = [
 dependencies = [
     "numpy>=1.20.0",
     "scipy>=1.7.0",
+    "pybind11>=2.6.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=3.0.0",
-    "Cython>=0.29.0",
 ]
 notebooks = [
     "jupyter>=1.0.0",

@@ -31,7 +31,8 @@
 
 ## Project Structure
 
-This is a Cython/Python library for generating periodic pore network models.
+This is a high-performance C++/Python library for generating periodic pore network models,
+using pybind11 for Python bindings and OpenMP for multi-threaded parallelization.
 
 ### Directory Structure
 
@@ -39,12 +40,12 @@ This is a Cython/Python library for generating periodic pore network models.
 PeriodicPNM/
 ├── periodicpnm/              # Main package directory
 │   ├── __init__.py           # Package initialization
-│   ├── periodic_edt.pyx      # Cython implementation of periodic EDT
-│   └── periodic_edt.c        # Generated C code (gitignored)
+│   ├── periodic_edt.cpp      # C++ implementation of periodic EDT with OpenMP
+│   └── periodic_edt.*.so     # Compiled extension (gitignored)
 ├── notebooks/                # Jupyter notebooks
 │   └── exploratory/          # Exploratory notebooks (gitignored)
 ├── tests/                    # Unit tests
-├── setup.py                  # Build configuration
+├── setup.py                  # Build configuration with pybind11
 ├── pyproject.toml            # Modern Python project metadata
 ├── requirements.txt          # Python dependencies
 ├── .gitignore                # Git ignore rules
@@ -71,16 +72,22 @@ conda activate ddpm_env
 pip install -e .
 ```
 
-This will automatically build the Cython extensions.
+This will automatically build the C++ extensions with pybind11 and OpenMP.
 
-### Building the Cython Extensions (User performs this)
+### Building the C++ Extensions (User performs this)
 
-After modifying `.pyx` files:
+After modifying `.cpp` files:
 
 ```bash
 conda activate ddpm_env
 python setup.py build_ext --inplace
 ```
+
+**Requirements:**
+- C++ compiler with C++11 support
+- OpenMP support (usually included with GCC/Clang on Linux, requires libomp on macOS)
+- pybind11 >= 2.6.0
+- numpy >= 1.20.0
 
 ### Testing
 
@@ -99,21 +106,24 @@ pytest tests/
 
 ## Code Style
 
-- Follow PEP 8 for Python code
-- Use type hints where appropriate
-- Document all public functions with numpy-style docstrings
-- Cython code should include optimization directives at the top of files:
-  ```cython
-  # cython: language_level=3
-  # cython: boundscheck=False, wraparound=False, cdivision=True
-  ```
+- **Python code**: Follow PEP 8
+  - Use type hints where appropriate
+  - Document all public functions with numpy-style docstrings
+
+- **C++ code**: Follow modern C++ best practices
+  - Use C++11 or later features
+  - Prefer `std::vector` over raw pointers for dynamic memory
+  - Use `const` and `constexpr` where appropriate
+  - Keep functions focused and well-documented
 
 ## Performance Considerations
 
-- The periodic EDT implementation uses the Felzenszwalb-Huttenlocher algorithm
-- For periodic boundaries, a virtual 2n domain approach is used
-- Memory is allocated with C malloc/free for performance
-- Consider OpenMP parallelization for future optimizations
+- **Algorithm**: Felzenszwalb-Huttenlocher (exact linear-time EDT)
+- **Periodic boundaries**: Virtual 2n domain approach
+- **Precision**: float32 (sufficient for distance transforms, 2x faster than float64)
+- **Parallelization**: OpenMP with `#pragma omp parallel for` on all major loops
+- **Memory**: C++ `std::vector` for safe automatic memory management
+- **Platform**: Optimized for multi-core CPUs (scales with number of cores)
 
 ## Key Implementation Details
 
@@ -126,10 +136,19 @@ pytest tests/
 
 ## Dependencies
 
-Core dependencies:
+**Python dependencies:**
 - numpy >= 1.20.0
 - scipy >= 1.7.0
-- Cython (for building)
+- pybind11 >= 2.6.0
+
+**System dependencies:**
+- C++ compiler with C++11 support (g++, clang++, or MSVC)
+- OpenMP library (usually included with GCC/Clang, `libomp` on macOS)
+
+**Platform-specific:**
+- Linux: `sudo apt-get install build-essential`
+- macOS: `xcode-select --install` + `brew install libomp`
+- Windows: Visual Studio with C++ development tools
 
 ## Notes for Claude
 
@@ -140,20 +159,21 @@ Core dependencies:
 - **Git Remote**: NEVER use `git push` or `git pull` - user handles all remote operations
 - **Installation**: When needed, ALWAYS use `pip install -e .` (editable/local install)
 
-### Cython Development
+### C++ Development
 
-- When adding new Cython code, always include proper memory management (malloc/free)
-- Check for NULL pointers after memory allocation
-- Use `nogil` blocks where possible for better performance
-- All `cdef` declarations must be at the top of functions (before any executable code)
+- Use C++11 or later features (auto, lambdas, range-based for, etc.)
+- Prefer `std::vector` over manual memory management
+- Use OpenMP pragmas for parallelization: `#pragma omp parallel for`
 - Test both periodic and non-periodic cases when modifying EDT code
+- Float32 is sufficient for distance transforms (faster than float64)
+- Include detailed comments explaining algorithm steps
 
 ### Common Mistakes to Avoid
 
 - ❌ Installing packages in base environment
 - ❌ Running builds automatically without user request
 - ❌ Using `git push` or `git pull`
-- ❌ Declaring `cdef` variables inside if/for blocks
+- ❌ Modifying .cpp files without user understanding the C++ changes
 - ✅ Always activate ddpm_env first
 - ✅ Let user handle builds and installations
-- ✅ Declare all `cdef` variables at function start
+- ✅ Explain C++ changes clearly when requested

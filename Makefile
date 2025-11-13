@@ -4,7 +4,7 @@ help:
 	@echo "PeriodicPNM - Makefile commands"
 	@echo ""
 	@echo "Available commands:"
-	@echo "  make build      - Build Cython extensions in-place"
+	@echo "  make build      - Build C++ extensions with pybind11 and OpenMP"
 	@echo "  make clean      - Remove build artifacts and compiled files"
 	@echo "  make test       - Run pytest test suite"
 	@echo "  make install    - Install package in development mode"
@@ -19,7 +19,7 @@ build:
 
 clean:
 	rm -rf build/ dist/ *.egg-info
-	rm -rf periodicpnm/*.c periodicpnm/*.so periodicpnm/*.html
+	rm -rf periodicpnm/*.so periodicpnm/*.o periodicpnm/*.html
 	rm -rf .pytest_cache htmlcov .coverage
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete
@@ -39,8 +39,8 @@ examples: build
 
 lint:
 	@which flake8 > /dev/null 2>&1 || (echo "flake8 not found. Install with: pip install flake8" && exit 1)
-	flake8 periodicpnm tests examples --exclude=periodicpnm/*.c
+	flake8 periodicpnm tests examples --exclude=periodicpnm/*.cpp
 
 format:
 	@which black > /dev/null 2>&1 || (echo "black not found. Install with: pip install black" && exit 1)
-	black periodicpnm tests examples --exclude periodicpnm/*.c
+	black periodicpnm tests examples --exclude periodicpnm/*.cpp
