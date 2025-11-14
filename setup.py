@@ -33,8 +33,8 @@ else:
 
 ext_modules = [
     Extension(
-        "periodicpnm.periodic_edt",
-        ["periodicpnm/periodic_edt.cpp"],
+        "periodicpnm.periodic_edt.periodic_edt_cpp",
+        ["periodicpnm/periodic_edt/periodic_edt_cpp.cpp"],
         include_dirs=[
             pybind11.get_include(),
             np.get_include(),

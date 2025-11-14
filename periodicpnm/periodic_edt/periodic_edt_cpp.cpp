@@ -22,6 +22,7 @@
 #include <cmath>
 #include <algorithm>
 
+
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -527,7 +528,7 @@ euclidean_distance_transform_periodic_impl(py::array binary,
 // pybind11 module definition
 // -----------------------------------------------------------------------------
 
-PYBIND11_MODULE(periodic_edt, m) {
+PYBIND11_MODULE(periodic_edt_cpp, m) {
     m.doc() = "Periodic Euclidean distance transform (1D/2D/3D, float32, OpenMP)";
 
     m.def(

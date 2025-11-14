@@ -20,10 +20,25 @@ def get_gaussian_kernel3d(size, sigma, dtype=torch.float32, device="cpu"):
     return kernel_x[:, None, None] * kernel_y[None, :, None] * kernel_z[None, None, :]
 
 
-def gaussian_filter(image, sigma, truncate=4.0, radius=None, mode='reflect', is_numpy=False):
+def gaussian_filter(
+    image,
+    sigma,
+    truncate=4.0,
+    radius=None,
+    periodic_axes=None,
+    is_numpy=True
+):
     if is_numpy:
         image = torch.from_numpy(image)
     ndim = image.ndim
+
+    if periodic_axes is None:
+        periodic_axes = (False, ) * ndim
+    elif isinstance(periodic_axes, bool):
+        periodic_axes = (periodic_axes, ) * ndim
+    elif len(periodic_axes) != ndim:
+        raise ValueError(f"periodic_axes must be a bool or a sequence of {ndim} bools, got {len(periodic_axes)}")
+
     if radius is None:
         radius = round(truncate * sigma)
     kernel_size = 2*radius + 1
@@ -36,10 +51,14 @@ def gaussian_filter(image, sigma, truncate=4.0, radius=None, mode='reflect', is_
     else:
         raise ValueError(f"Gaussian filter only supports 1D, 2D, or 3D arrays, got {ndim}D")
     padding_size = radius
-    padding = (padding_size, ) * 2 * ndim
+    periodic_padding = [padding_size if periodic else 0 for periodic in periodic_axes for _ in range(2)]
+    reflect_padding = [padding_size if not periodic else 0 for periodic in periodic_axes for _ in range(2)]
     image = image.unsqueeze(0).unsqueeze(0)
     kernel = kernel.unsqueeze(0).unsqueeze(0)
-    image = pad(image, padding, mode=mode)
+
+    image = pad(image, periodic_padding, mode='circular')
+    image = pad(image, reflect_padding, mode='reflect')
+
     if ndim == 1:
         image = conv1d(image, kernel, padding=0)
     elif ndim == 2:
