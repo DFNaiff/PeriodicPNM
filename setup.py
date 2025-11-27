@@ -43,6 +43,18 @@ ext_modules = [
         extra_link_args=openmp_link_args,
         language="c++",
         cxx_std=11,  # C++11 minimum
+    ),
+    Extension(
+        "periodicpnm.watershed.periodic_watershed_cpp",
+        ["periodicpnm/watershed/periodic_watershed_cpp.cpp"],
+        include_dirs=[
+            pybind11.get_include(),
+            np.get_include(),
+        ],
+        extra_compile_args=openmp_compile_args,
+        extra_link_args=openmp_link_args,
+        language="c++",
+        cxx_std=11,  # C++11 minimum
     )
 ]
 
