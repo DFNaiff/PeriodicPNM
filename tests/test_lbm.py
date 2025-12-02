@@ -69,7 +69,8 @@ class TestLBMSolverBasics:
             simple_2d_geometry,
             device='cpu'
         )
-        assert solver.periodic_axes == [False, False]
+        # periodic_axes is stored as tuple
+        assert solver.periodic_axes == (False, False)
 
     def test_custom_periodic_axes_2d(self, simple_2d_geometry):
         """Test custom periodic_axes in 2D."""
@@ -78,7 +79,8 @@ class TestLBMSolverBasics:
             periodic_axes=(False, True),
             device='cpu'
         )
-        assert solver.periodic_axes == [False, True]
+        # periodic_axes is stored as tuple
+        assert solver.periodic_axes == (False, True)
 
     def test_custom_periodic_axes_3d(self, simple_3d_geometry):
         """Test custom periodic_axes in 3D."""
@@ -87,7 +89,8 @@ class TestLBMSolverBasics:
             periodic_axes=(False, True, True),
             device='cpu'
         )
-        assert solver.periodic_axes == [False, True, True]
+        # periodic_axes is stored as tuple
+        assert solver.periodic_axes == (False, True, True)
 
 
 @pytest.mark.skipif(not LETTUCE_AVAILABLE, reason="lettuce not installed")
@@ -105,8 +108,8 @@ class TestPeriodicBoundaries:
         )
         # Should create without error
         assert solver is not None
-        # Periodic axes should be set correctly
-        assert solver.periodic_axes == [False, True]
+        # Periodic axes should be set correctly (stored as tuple)
+        assert solver.periodic_axes == (False, True)
 
     def test_periodic_flow_direction_without_body_force_raises_error(self, simple_2d_geometry):
         """Test that periodic flow direction without body force raises ValueError."""
@@ -158,7 +161,7 @@ class TestPeriodicBoundaries:
             device='cpu'
         )
         assert solver is not None
-        assert solver.periodic_axes == [True, True, True]
+        assert solver.periodic_axes == (True, True, True)
 
 
 @pytest.mark.skipif(not LETTUCE_AVAILABLE, reason="lettuce not installed")
@@ -288,7 +291,7 @@ class TestFlowConfigurations:
             acceleration=0.000001,
             device='cpu'
         )
-        assert solver.periodic_axes == [False, False]
+        assert solver.periodic_axes == (False, False)
         # Should be able to solve without body force
         # (just testing initialization here for speed)
 
@@ -300,7 +303,7 @@ class TestFlowConfigurations:
             acceleration=0.000001,
             device='cpu'
         )
-        assert solver.periodic_axes == [False, True]
+        assert solver.periodic_axes == (False, True)
         # Should be able to solve without body force (pressure BC in x)
 
     def test_configuration_fully_periodic(self, simple_2d_geometry):
@@ -311,7 +314,7 @@ class TestFlowConfigurations:
             body_force=[0.000001, 0],  # MUST have body force
             device='cpu'
         )
-        assert solver.periodic_axes == [True, True]
+        assert solver.periodic_axes == (True, True)
         assert solver.body_force is not None
         # Should be able to solve with body force
 
@@ -324,7 +327,7 @@ class TestFlowConfigurations:
             acceleration=0.000001,
             device='cpu'
         )
-        assert solver.periodic_axes == [False, True, True]
+        assert solver.periodic_axes == (False, True, True)
 
 
 @pytest.mark.skipif(not LETTUCE_AVAILABLE, reason="lettuce not installed")
