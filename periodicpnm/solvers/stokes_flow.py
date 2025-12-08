@@ -535,7 +535,7 @@ class StokesFlowSolver:
         if self.flow_rate is None:
             raise RuntimeError("Must solve flow first")
         unit_vectors = self.network['throat.unit_vector']
-        net_flow = [self.flow_rate[:, None] * unit_vectors].sum(axis=0)
+        net_flow = (self.flow_rate[:, None] * unit_vectors).sum(axis=0)
         return net_flow
 
     def average_velocity(self):
