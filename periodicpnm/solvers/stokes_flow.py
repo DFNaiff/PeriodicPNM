@@ -531,77 +531,17 @@ class StokesFlowSolver:
             logger.debug(f"Mass conservation satisfied: max residual = {max_residual:.3e}")
         return max_residual
 
-    def compute_effective_permeability(self, direction, domain_length):
-        """
-        Compute effective permeability in a given direction.
-
-        Uses Darcy's law: Q = (k A / μ) ΔP/L
-        where k is permeability, A is cross-sectional area.
-
-        Parameters
-        ----------
-        direction : int or array_like
-            Direction index (0, 1, 2) or unit vector [dx, dy, dz]
-        domain_length : float or array_like
-            Domain length in the flow direction (m)
-
-        Returns
-        -------
-        permeability : float
-            Effective permeability (m²)
-
-        Notes
-        -----
-        This assumes a pressure-driven flow (no body force) across the domain.
-        The domain should have periodic boundaries or appropriate inlet/outlet BCs.
-        """
-        if self.pressure is None:
+    def net_flow_rate(self):
+        if self.flow_rate is None:
             raise RuntimeError("Must solve flow first")
+        unit_vectors = self.network['throat.unit_vector']
+        net_flow = [self.flow_rate[:, None] * unit_vectors].sum(axis=0)
+        return net_flow
 
-        # Parse direction
-        if np.isscalar(direction):
-            dir_vec = np.zeros(3)
-            dir_vec[direction] = 1.0
-        else:
-            dir_vec = np.asarray(direction, dtype=float)
-            dir_vec = dir_vec / np.linalg.norm(dir_vec)
-
-        # Total flow in direction (sum over throats)
-        throat_dirs = self.network['throat.unit_vector']
-        flow_projection = self.flow_rate @ (throat_dirs @ dir_vec)
-
-        # Get pressure drop
-        if len(self.bc_pores) >= 2:
-            # Use BC pressures if available
-            delta_p = np.abs(self.bc_values.max() - self.bc_values.min())
-        else:
-            # Use pressure range
-            delta_p = self.pressure.max() - self.pressure.min()
-
-        if delta_p == 0:
-            logger.warning("Zero pressure drop, cannot compute permeability")
-            return 0.0
-
-        # Estimate cross-sectional area (very approximate)
-        # For a proper calculation, need domain dimensions
-        coords = self.network['pore.coords']
-        extent = coords.max(axis=0) - coords.min(axis=0)
-
-        # Cross-sectional area perpendicular to flow
-        if np.isscalar(domain_length):
-            L = domain_length
-        else:
-            L = np.asarray(domain_length) @ dir_vec
-
-        # Rough estimate: domain area = product of other two dimensions
-        perp_area = np.prod(extent) / extent[np.argmax(np.abs(dir_vec))]
-
-        # Darcy's law: k = (μ L Q) / (A ΔP)
-        k = (self.viscosity * L * abs(flow_projection)) / (perp_area * delta_p)
-
-        logger.info(f"Effective permeability: {k:.3e} m²")
-
-        return k
+    def average_velocity(self):
+        if self.flow_rate is None:
+            raise RuntimeError("Must solve flow first")
+        return self.flow_rate.sum() / self.network['throat.total_length'].sum()
 
     def compute_formation_factor(self, conductivity_fluid=1.0):
         """
@@ -625,6 +565,7 @@ class StokesFlowSolver:
         This uses the same network topology but with conductances proportional
         to cross-sectional area (not r^4 as in Poiseuille flow).
         """
+        raise NotImplementedError("Computing formation factor is not implemented yet")
         if self.Nt == 0:
             return np.inf
 
