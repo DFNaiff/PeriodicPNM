@@ -43,7 +43,7 @@ class StokesFlowSolver:
         - 'throat.unit_vector': Unit vectors for each throat
     viscosity : float, optional
         Dynamic viscosity of the fluid (Pa·s). Default is 1e-3 (water).
-    shape_factor : float, optional
+    shape_factor : float | array_like, optional
         Geometric shape factor γ for non-circular cross-sections.
         Default is 1.0 (circular tubes). For other shapes:
         - Square: ~0.562
@@ -98,7 +98,7 @@ class StokesFlowSolver:
     >>> Q_total = np.sum(np.abs(solver.flow_rate))
     """
 
-    def __init__(self, network, viscosity=1e-3, shape_factor=1.0):
+    def __init__(self, network, viscosity=1.0, shape_factor=1.0):
         """Initialize Stokes flow solver."""
         self.network = network
         self.viscosity = viscosity
@@ -107,6 +107,17 @@ class StokesFlowSolver:
         # Extract network dimensions
         self.Np = len(network['pore.coords'])
         self.Nt = len(network['throat.conns'])
+
+        # Validate and convert shape factor to array
+        if np.isscalar(shape_factor):
+            self.shape_factor = np.full(self.Nt, shape_factor)
+        else:
+            self.shape_factor = np.asarray(shape_factor, dtype=float)
+            if len(self.shape_factor) != self.Nt:
+                raise ValueError(
+                    "shape_factor must be a scalar or an array of the same length"
+                    f"as the number of throats ({self.Nt}), got {len(shape_factor)}"
+                )
 
         logger.info(f"Initializing StokesFlowSolver: {self.Np} pores, {self.Nt} throats")
 
@@ -150,65 +161,170 @@ class StokesFlowSolver:
         data = np.concatenate([-np.ones(self.Nt), np.ones(self.Nt)])
 
         self.A = sp.coo_matrix((data, (row, col)),
-                                shape=(self.Np, self.Nt)).tocsr()
+                               shape=(self.Np, self.Nt)).tocsr()
 
         logger.debug(f"Connectivity matrix A: {self.A.shape}, nnz={self.A.nnz}")
 
     def _compute_conductances(self):
         """
-        Compute throat conductances ξ_j = γ π/8 * r_j^4 / (μ l_j).
+        Compute throat conductances ξ_j = γ π/8 * r_j^4 / (μ l_j) for each throat.
+        If throat conductance is already in the network, use it instead.
         """
         if self.Nt == 0:
             self.Xi = sp.csr_matrix((0, 0))
             self.throat_conductance = np.array([])
             return
 
-        # Extract throat properties
-        r = self.network['throat.diameter'] / 2  # radius
-        l = self.network['throat.length']
+        if 'throat.conductance' in self.network:
+            self.throat_conductance = self.network['throat.conductance']
+        else:
+            # Extract throat properties
+            radius = self.network['throat.diameter'] / 2  # radius
+            length = self.network['throat.total_length']
 
-        # Check for zero or negative values
-        if np.any(r <= 0):
-            logger.warning(f"Found {np.sum(r <= 0)} throats with non-positive radius")
-            r = np.maximum(r, 1e-10)  # Prevent division by zero
-        if np.any(l <= 0):
-            logger.warning(f"Found {np.sum(l <= 0)} throats with non-positive length")
-            l = np.maximum(l, 1e-10)
+            # Check for zero or negative values
+            if np.any(radius <= 0):
+                logger.warning(f"Found {np.sum(radius <= 0)} throats with non-positive radius")
+                radius = np.maximum(radius, 1e-10)  # Prevent division by zero
+            if np.any(length <= 0):
+                logger.warning(f"Found {np.sum(length <= 0)} throats with non-positive length")
+                length = np.maximum(length, 1e-10)
 
-        # Compute conductance: γ π/8 * r^4 / (μ l)
-        self.throat_conductance = (self.shape_factor * np.pi / 8) * (r**4) / (self.viscosity * l)
+            # Compute conductance: γ π/8 * r^4 / (μ l)
+            self.throat_conductance = (self.shape_factor * np.pi / 8) * (radius**4) / (self.viscosity * length)
 
         # Create diagonal sparse matrix
         self.Xi = sp.diags(self.throat_conductance, format='csr')
 
         logger.debug(f"Throat conductances: min={self.throat_conductance.min():.3e}, "
-                    f"max={self.throat_conductance.max():.3e}")
+                     f"max={self.throat_conductance.max():.3e}")
 
     def set_boundary_conditions(self, pores, values):
         """
-        Set Dirichlet (pressure) boundary conditions at specified pores.
+        Add or update Dirichlet (pressure) boundary conditions at specified pores.
+
+        This method adds new boundary conditions to existing ones. If a pore
+        already has a boundary condition, its value will be updated. Use
+        reset_boundary_conditions() to clear all BCs before setting new ones.
 
         Parameters
         ----------
         pores : array_like
             Indices of pores where pressure is specified
-        values : array_like
-            Pressure values at boundary pores (Pa)
+        values : array_like or scalar
+            Pressure values at boundary pores (Pa). If scalar, the same value
+            is applied to all specified pores.
 
         Examples
         --------
+        >>> # Set BCs incrementally
+        >>> solver.set_boundary_conditions(solver.get_boundary_pores('xmin'), 1e5)
+        >>> solver.set_boundary_conditions(solver.get_boundary_pores('xmax'), 0.0)
+        >>>
+        >>> # Or set multiple at once
         >>> solver.set_boundary_conditions([0, 10], [1e5, 0])  # inlet/outlet
         """
-        self.bc_pores = np.asarray(pores, dtype=int)
-        self.bc_values = np.asarray(values, dtype=float)
+        pores = np.asarray(pores, dtype=int)
 
-        if len(self.bc_pores) != len(self.bc_values):
-            raise ValueError("Number of pores and values must match")
-
-        if np.any(self.bc_pores < 0) or np.any(self.bc_pores >= self.Np):
+        # Validate pore indices
+        if np.any(pores < 0) or np.any(pores >= self.Np):
             raise ValueError(f"Pore indices must be in range [0, {self.Np})")
 
-        logger.info(f"Set boundary conditions at {len(self.bc_pores)} pores")
+        # Handle scalar values
+        if np.isscalar(values):
+            values = np.full(len(pores), values)
+        else:
+            values = np.asarray(values, dtype=float)
+            if len(values) != len(pores):
+                raise ValueError(
+                    "Number of values must match the number of pores"
+                    f"({len(pores)}), got {len(values)}"
+                )
+
+        # Merge with existing BCs (using dict for easy update)
+        bc_dict = dict(zip(self.bc_pores, self.bc_values))
+        bc_dict.update(dict(zip(pores, values)))
+
+        # Convert back to arrays
+        self.bc_pores = np.array(list(bc_dict.keys()), dtype=int)
+        self.bc_values = np.array(list(bc_dict.values()), dtype=float)
+
+        logger.info(f"Set boundary conditions at {len(pores)} pores "
+                    f"(total BCs: {len(self.bc_pores)})")
+
+    def reset_boundary_conditions(self):
+        """
+        Clear all boundary conditions.
+
+        After calling this method, the solver has no boundary conditions set.
+        You can then use set_boundary_conditions() to add new ones.
+
+        Examples
+        --------
+        >>> solver.reset_boundary_conditions()
+        >>> solver.set_boundary_conditions([0, 10], [1e5, 0])
+        """
+        self.bc_pores = np.array([], dtype=int)
+        self.bc_values = np.array([], dtype=float)
+        logger.info("Cleared all boundary conditions")
+
+    def get_boundary_pores(self, location, tol=1e-10):
+        """
+        Get indices of pores at a specified boundary location.
+
+        Parameters
+        ----------
+        location : str
+            Boundary location identifier. Must be one of:
+            'xmin', 'xmax', 'ymin', 'ymax', 'zmin', 'zmax'
+        tol : float, optional
+            Tolerance for identifying boundary pores (m). Default is 1e-10.
+
+        Returns
+        -------
+        pore_indices : ndarray
+            Array of pore indices at the specified boundary
+
+        Examples
+        --------
+        >>> # Get pores at x minimum boundary
+        >>> inlet_pores = solver.get_boundary_pores('xmin')
+        >>> solver.set_boundary_conditions(inlet_pores, [1e5] * len(inlet_pores))
+        >>>
+        >>> # Get pores at x maximum boundary
+        >>> outlet_pores = solver.get_boundary_pores('xmax')
+        >>> solver.set_boundary_conditions(outlet_pores, [0.0] * len(outlet_pores))
+
+        Raises
+        ------
+        ValueError
+            If location is not a valid boundary identifier
+        """
+        valid_locations = ['xmin', 'xmax', 'ymin', 'ymax', 'zmin', 'zmax']
+        if location not in valid_locations:
+            raise ValueError(f"location must be one of {valid_locations}, got '{location}'")
+
+        coords = self.network['pore.coords']
+
+        # Parse location string
+        if location.startswith('x'):
+            axis = 0
+        elif location.startswith('y'):
+            axis = 1
+        elif location.startswith('z'):
+            axis = 2
+
+        if location.endswith('min'):
+            target_value = coords[:, axis].min()
+        elif location.endswith('max'):
+            target_value = coords[:, axis].max()
+
+        # Find pores within tolerance of target value
+        pore_indices = np.where(np.abs(coords[:, axis] - target_value) <= tol)[0]
+
+        logger.debug(f"Found {len(pore_indices)} pores at {location}")
+
+        return pore_indices
 
     def set_body_force(self, force):
         """
@@ -232,7 +348,7 @@ class StokesFlowSolver:
             raise ValueError("Body force must be 3D vector")
 
         logger.info(f"Set body force: [{self.body_force[0]:.3e}, "
-                   f"{self.body_force[1]:.3e}, {self.body_force[2]:.3e}]")
+                    f"{self.body_force[1]:.3e}, {self.body_force[2]:.3e}]")
 
     def _compute_body_force_projection(self):
         """
@@ -248,7 +364,7 @@ class StokesFlowSolver:
 
         return g
 
-    def solve(self, method='spsolve', tol=1e-8):
+    def solve(self, method='spsolve', tol=1e-8, return_system=False):
         """
         Solve the pressure Poisson equation: A Ξ A^T p = A Ξ g + bc_terms.
 
@@ -280,7 +396,7 @@ class StokesFlowSolver:
 
         # Compute body force projection
         g = self._compute_body_force_projection()
-        g_vec = self.network['throat.length'] * g  # Scale by throat length
+        g_vec = self.network['throat.total_length'] * g  # Scale by throat length
 
         # Build system: L p = b where L = A Ξ A^T
         L = self.A @ self.Xi @ self.A.T
@@ -310,14 +426,21 @@ class StokesFlowSolver:
         self._compute_flow_rates()
 
         logger.info(f"Solution obtained: p_min={self.pressure.min():.3e}, "
-                   f"p_max={self.pressure.max():.3e}")
+                    f"p_max={self.pressure.max():.3e}")
         logger.info(f"Flow rates: Q_min={self.flow_rate.min():.3e}, "
-                   f"Q_max={self.flow_rate.max():.3e}")
+                    f"Q_max={self.flow_rate.max():.3e}")
 
         # Check mass conservation
         self._check_mass_conservation()
 
-        return self.pressure
+        return_dict = {
+            'pressure': self.pressure,
+            'flow_rate': self.flow_rate
+        }
+        if return_system:
+            return_dict['L'] = L
+            return_dict['b'] = b
+        return return_dict
 
     def _apply_boundary_conditions(self, L, b):
         """
@@ -381,7 +504,8 @@ class StokesFlowSolver:
 
         # Body force contribution
         g = self._compute_body_force_projection()
-        g_vec = self.network['throat.length'] * g
+        print(g)
+        g_vec = self.network['throat.total_length'] * g
 
         # Poiseuille flow: Q_j = ξ_j (g_j l_j - (A^T p)_j)
         self.flow_rate = self.throat_conductance * (g_vec - pressure_diff)
@@ -401,6 +525,7 @@ class StokesFlowSolver:
             logger.warning(f"Mass conservation residual: {max_residual:.3e}")
         else:
             logger.debug(f"Mass conservation satisfied: max residual = {max_residual:.3e}")
+        return max_residual
 
     def compute_effective_permeability(self, direction, domain_length):
         """
@@ -507,7 +632,7 @@ class StokesFlowSolver:
 
         # Compute electrical conductances: σ_j = σ_fluid * A_j / l_j
         A_throat = np.pi * (self.network['throat.diameter'] / 2)**2
-        l_throat = self.network['throat.length']
+        l_throat = self.network['throat.total_length']
         elec_conductance = conductivity_fluid * A_throat / l_throat
 
         # Temporarily replace conductances
@@ -519,7 +644,7 @@ class StokesFlowSolver:
         self.solve()
 
         # Compute current flow
-        throat_dirs = self.network['throat.unit_vector']
+        # throat_dirs = self.network['throat.unit_vector']
 
         # Formation factor from Ohm's law analogy
         # F = (theoretical conductance) / (actual conductance)

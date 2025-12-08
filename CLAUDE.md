@@ -98,6 +98,14 @@ conda activate ddpm_env
 pytest tests/
 ```
 
+**IMPORTANT: Testing Policy**
+
+- **Default behavior**: DO NOT automatically run tests unless the user explicitly asks
+- **When user asks to run tests**: Run the tests and iterate on failures until all tests pass
+- **Iteration process**: If tests fail, fix the issues and re-run tests until they pass
+- Only run tests related to the work you're doing when explicitly requested
+- Use `pytest tests/test_specific_file.py::TestClassName::test_method_name` to run specific tests
+
 ### Exploratory Notebooks
 
 - Use `notebooks/exploratory/` for experimental work

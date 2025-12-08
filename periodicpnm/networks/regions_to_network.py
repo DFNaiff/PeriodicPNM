@@ -335,7 +335,7 @@ def periodic_regions_to_network(
     if Nt > 0:
         logger.info(f"  Periodic throats: {n_periodic}/{Nt} ({100*n_periodic/Nt:.1f}%)")
     else:
-        logger.info(f"  Periodic throats: 0")
+        logger.info("  Periodic throats: 0")
 
     return net
 

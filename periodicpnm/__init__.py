@@ -19,5 +19,6 @@ from .watershed import *
 from .networks import *
 from .solvers import *
 from .lbm import *
+from .visualization import *
 
 __version__ = "0.1.0"
