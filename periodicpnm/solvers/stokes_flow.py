@@ -179,7 +179,7 @@ class StokesFlowSolver:
             self.throat_conductance = self.network['throat.conductance']
         else:
             # Extract throat properties
-            radius = self.network['throat.diameter'] / 2  # radius
+            radius = self.network['throat.equivalent_diameter'] / 2  # radius
             length = self.network['throat.total_length']
 
             # Check for zero or negative values
@@ -510,6 +510,10 @@ class StokesFlowSolver:
         # Poiseuille flow: Q_j = ξ_j (g_j l_j - (A^T p)_j)
         self.flow_rate = self.throat_conductance * (g_vec - pressure_diff)
 
+        # Average velocity in throats
+        throat_area = np.pi * (self.network['throat.equivalent_diameter'] / 2)**2
+        self.average_velocity = self.flow_rate / throat_area
+
     def _check_mass_conservation(self):
         """Check mass conservation at each pore."""
         if self.Nt == 0:
@@ -631,7 +635,7 @@ class StokesFlowSolver:
         old_body_force = self.body_force.copy()
 
         # Compute electrical conductances: σ_j = σ_fluid * A_j / l_j
-        A_throat = np.pi * (self.network['throat.diameter'] / 2)**2
+        A_throat = np.pi * (self.network['throat.equivalent_diameter'] / 2)**2
         l_throat = self.network['throat.total_length']
         elec_conductance = conductivity_fluid * A_throat / l_throat
 
@@ -705,7 +709,7 @@ class StokesFlowSolver:
 
         # Compute throat velocities
         if self.Nt > 0:
-            A_throat = np.pi * (self.network['throat.diameter'] / 2)**2
+            A_throat = np.pi * (self.network['throat.equivalent_diameter'] / 2)**2
             solution['throat.velocity'] = self.flow_rate / A_throat
 
             # Net flow into each pore (conservation check)

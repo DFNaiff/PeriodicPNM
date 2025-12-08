@@ -22,7 +22,7 @@ try:
     logger.info("Lettuce CFD successfully imported")
 except ImportError:
     warnings.warn("Could not import lettuce. LBM functionality will be limited. "
-                  "Install with: pip install lettuce")
+                  "Install with: pip install lettucecfd")
 
     # Create mock classes for graceful degradation
     class MockStencil:
@@ -522,8 +522,8 @@ class LBMSolver:
 
         Parameters
         ----------
-        solid_geometry : ndarray
-            Binary array (True=solid, False=void)
+        pore_geometry : ndarray
+            Binary array (True=pore, False=void)
         grid_size_pu : float
             Grid spacing in physical units
         reynolds_number : float

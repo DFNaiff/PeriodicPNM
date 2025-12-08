@@ -11,7 +11,14 @@ import logging
 import numpy as np
 import scipy.ndimage as spim
 from skimage.morphology import disk, ball
+from skimage.segmentation import find_boundaries
 from edt import edt
+
+try:
+    from ..periodic_edt import periodic_edt
+    HAS_PERIODIC_EDT = True
+except ImportError:
+    HAS_PERIODIC_EDT = False
 
 
 __all__ = [
@@ -20,6 +27,219 @@ __all__ = [
 
 
 logger = logging.getLogger(__name__)
+
+
+def _periodic_center_of_mass(positions, shape, periodic_axes):
+    """
+    Calculate center of mass accounting for periodic boundaries.
+
+    For periodic axes, uses circular statistics to correctly handle wrapping.
+    For non-periodic axes, uses standard mean.
+
+    Parameters
+    ----------
+    positions : ndarray (N, ndim)
+        Positions of voxels in the region (as array of coordinate tuples)
+    shape : array_like
+        Domain shape
+    periodic_axes : array_like of bool
+        Which axes have periodic boundaries
+
+    Returns
+    -------
+    center : ndarray (ndim,)
+        Center of mass with periodic boundaries respected
+
+    Notes
+    -----
+    For periodic axes, this uses the circular statistics approach:
+    1. Convert positions to angles: θ = 2π * x / L
+    2. Calculate mean of unit vectors on the circle
+    3. Convert back: x = L/(2π) * atan2(mean_sin, mean_cos)
+
+    This correctly handles cases where a region wraps around the boundary.
+    For example, positions [0, 1, 2, 38, 39] in a domain of size 40 will
+    correctly give center ≈ 0, not 16!
+    """
+    if len(positions) == 0:
+        return np.zeros(len(shape))
+
+    ndim = len(shape)
+    center = np.zeros(ndim)
+
+    for axis in range(ndim):
+        coords = positions[:, axis]
+
+        if periodic_axes[axis]:
+            # Use circular statistics for periodic axis
+            L = shape[axis]
+            theta = 2 * np.pi * coords / L
+            mean_cos = np.mean(np.cos(theta))
+            mean_sin = np.mean(np.sin(theta))
+            center[axis] = L / (2 * np.pi) * np.arctan2(mean_sin, mean_cos)
+
+            # Ensure result is in [0, L)
+            if center[axis] < 0:
+                center[axis] += L
+            center[axis] = center[axis] % L
+        else:
+            # Standard mean for non-periodic axis
+            center[axis] = np.mean(coords)
+
+    return center
+
+
+def _borders(shape, mode='faces', thickness=1, axes_mask=None):
+    """
+    Create a mask of border voxels.
+
+    Parameters
+    ----------
+    shape : tuple
+        Shape of the domain
+    mode : str
+        'faces' returns only face voxels, 'edges' returns edge and corner voxels
+    thickness : int
+        Thickness of border in voxels
+    axes_mask : array_like of bool, optional
+        Which axes to include in the border. If None, all axes are included.
+        For example, [True, False, True] includes only axes 0 and 2.
+
+    Returns
+    -------
+    mask : ndarray
+        Boolean mask of border voxels
+    """
+    ndim = len(shape)
+    t = thickness
+
+    if axes_mask is None:
+        axes_mask = np.ones(ndim, dtype=bool)
+    else:
+        axes_mask = np.array(axes_mask, dtype=bool)
+
+    if mode == 'faces':
+        # Just the faces (excluding edges/corners)
+        mask = np.zeros(shape, dtype=bool)
+        for axis in range(ndim):
+            if not axes_mask[axis]:
+                continue
+            slices_start = [slice(None)] * ndim
+            slices_start[axis] = slice(0, t)
+            mask[tuple(slices_start)] = True
+
+            slices_end = [slice(None)] * ndim
+            slices_end[axis] = slice(-t, None)
+            mask[tuple(slices_end)] = True
+
+        # Now remove edges: areas where multiple axes meet borders
+        edge_count = np.zeros(shape, dtype=int)
+        for axis in range(ndim):
+            if not axes_mask[axis]:
+                continue
+            slices_start = [slice(None)] * ndim
+            slices_start[axis] = slice(0, t)
+            edge_count[tuple(slices_start)] += 1
+
+            slices_end = [slice(None)] * ndim
+            slices_end[axis] = slice(-t, None)
+            edge_count[tuple(slices_end)] += 1
+
+        # Faces are where exactly 1 axis is on border
+        mask = edge_count == 1
+
+    elif mode == 'edges':
+        # Edges and corners: where 2+ axes meet borders
+        edge_count = np.zeros(shape, dtype=int)
+        for axis in range(ndim):
+            if not axes_mask[axis]:
+                continue
+            slices_start = [slice(None)] * ndim
+            slices_start[axis] = slice(0, t)
+            edge_count[tuple(slices_start)] += 1
+
+            slices_end = [slice(None)] * ndim
+            slices_end[axis] = slice(-t, None)
+            edge_count[tuple(slices_end)] += 1
+
+        mask = edge_count >= 2
+
+    return mask
+
+
+def _add_boundary_regions_selective(regions, periodic_axes, pad_width=3):
+    """
+    Add boundary regions only on non-periodic faces.
+
+    This function follows PoreSpy's add_boundary_regions algorithm but only
+    adds boundaries for non-periodic axes.
+
+    Parameters
+    ----------
+    regions : ndarray
+        Labeled regions image
+    periodic_axes : ndarray of bool
+        Which axes are periodic (no boundaries added for periodic axes)
+    pad_width : int
+        Thickness of boundary regions in voxels
+
+    Returns
+    -------
+    new_regions : ndarray
+        Image with boundary regions added on non-periodic faces
+    """
+    # If all axes are periodic, no boundaries needed
+    if np.all(periodic_axes):
+        return regions
+
+    ndim = regions.ndim
+    t = pad_width
+    mx = regions.max()
+
+    # Invert periodic_axes to get axes where we ADD boundaries
+    non_periodic_axes = ~periodic_axes
+
+    # Step 1: Remove boundaries between regions (PoreSpy step)
+    bd = find_boundaries(regions, connectivity=ndim, mode='inner')
+
+    # Step 2: Pad by t on ALL sides initially (like PoreSpy)
+    # This is needed for the borders() function to work correctly
+    face_regions = np.pad(regions * (~bd), pad_width=t, mode='edge')
+
+    # Step 3: Set edges/corners to 0 (only for non-periodic axes)
+    edges = _borders(face_regions.shape, mode='edges', thickness=t, axes_mask=non_periodic_axes)
+    face_regions[edges] = 0
+
+    # Step 4: Extract mask of just the faces (only for non-periodic axes)
+    mask = _borders(face_regions.shape, mode='faces', thickness=t, axes_mask=non_periodic_axes)
+
+    # Step 5: Relabel regions on faces (PoreSpy algorithm)
+    # Create new_regions from labeling + mx offset
+    new_regions = spim.label(face_regions * mask)[0] + mx * (face_regions > 0)
+
+    # Step 6: Overwrite center with original regions
+    # The center is the inner part of the padded array (excluding all borders)
+    center_slices = tuple([slice(t, -t) for _ in range(ndim)])
+    new_regions[center_slices] = regions
+
+    # Step 7: Trim back to correct size
+    # For periodic axes: trim back to original size
+    # For non-periodic axes: keep the padding
+    trim_slices = []
+    for axis in range(ndim):
+        if periodic_axes[axis]:
+            # Trim back to original: remove t from both ends
+            trim_slices.append(slice(t, -t))
+        else:
+            # Keep padding: no trimming
+            trim_slices.append(slice(None))
+
+    new_regions = new_regions[tuple(trim_slices)]
+
+    # Relabel to be contiguous
+    new_regions = _make_contiguous(new_regions)
+
+    return new_regions
 
 
 def periodic_regions_to_network(
@@ -146,9 +366,6 @@ def periodic_regions_to_network(
 
     # Prepare inputs
     im = _make_contiguous(regions)
-    struc_elem = disk if im.ndim == 2 else ball
-    voxel_size = float(voxel_size)
-    shape = np.array(im.shape)
     ndim = im.ndim
 
     # Normalize periodic_axes to array
@@ -157,16 +374,60 @@ def periodic_regions_to_network(
     else:
         periodic_axes = np.array(periodic_axes[:ndim])
 
-    # Prepare phases
+    # Prepare phases before adding boundary regions
     if phases is None:
-        phases = (im > 0).astype(int)
-    if im.size != phases.size:
+        phases = (regions > 0).astype(int)
+    if regions.size != phases.size:
         raise Exception('regions and phases have different sizes')
 
+    # Add boundary regions for non-periodic axes
+    # This ensures compatibility with PoreSpy's regions_to_network behavior
+    if not np.all(periodic_axes):
+        logger.info("Adding boundary regions on non-periodic faces")
+        im = _add_boundary_regions_selective(im, periodic_axes, pad_width=3)
+
+        # Also pad phases to match: pad by t=3 on all sides, then trim
+        t = 3
+        phases_padded = np.pad(phases, pad_width=t, mode='edge')
+
+        # Trim phases to match the new im shape
+        trim_slices = []
+        for axis in range(ndim):
+            if periodic_axes[axis]:
+                # Trim back to original
+                trim_slices.append(slice(t, -t))
+            else:
+                # Keep padding
+                trim_slices.append(slice(None))
+        phases = phases_padded[tuple(trim_slices)]
+
+    struc_elem = disk if im.ndim == 2 else ball
+    voxel_size = float(voxel_size)
+    shape = np.array(im.shape)
+    ndim = im.ndim
+
     # Compute distance transform
+    # Use periodic EDT if we have any periodic axes and the extension is available
+    use_periodic_edt = HAS_PERIODIC_EDT and np.any(periodic_axes)
+
+    if use_periodic_edt:
+        logger.info("Using periodic EDT for distance transform (periodic boundaries)")
+    else:
+        if np.any(periodic_axes) and not HAS_PERIODIC_EDT:
+            logger.warning(
+                "Periodic axes specified but periodic_edt not available. "
+                "Using standard EDT - results may be incorrect near boundaries! "
+                "Build C++ extensions for proper periodic EDT."
+            )
+        logger.info("Using standard EDT for distance transform")
+
     dt = np.zeros_like(phases, dtype=np.float32)
     for i in np.unique(phases[phases.nonzero()]):
-        dt += edt(phases == i)
+        phase_mask = phases == i
+        if use_periodic_edt:
+            dt += periodic_edt(phase_mask, periodic_axes=periodic_axes, squared=False)
+        else:
+            dt += edt(phase_mask)
 
     # Get slices for each pore region
     slices = spim.find_objects(im)
@@ -210,7 +471,13 @@ def periodic_regions_to_network(
 
         # Extract pore properties
         p_label[pore] = i
-        p_coords_cm[pore, :] = spim.center_of_mass(pore_im) + s_offset
+
+        # Calculate center of mass with periodic boundary awareness
+        # Get all voxel positions in global coordinates
+        pore_voxels = np.array(np.where(pore_im)).T  # Shape: (N_voxels, ndim)
+        pore_voxels_global = pore_voxels + s_offset  # Add offset to get global coords
+        p_coords_cm[pore, :] = _periodic_center_of_mass(pore_voxels_global, shape, periodic_axes)
+
         temp = np.vstack(np.where(pore_dt == pore_dt.max()))[:, 0]
         p_coords_dt[pore, :] = temp + s_offset
         p_phase[pore] = (phases[s] * pore_im).max()
@@ -239,9 +506,12 @@ def periodic_regions_to_network(
                 p_area_surf[pore] -= np.size(vx[0])
 
                 # Find throat center
-                t_inds = tuple([vi + oi for vi, oi in zip(vx, s_offset)])
-                temp = np.where(dt[t_inds] == np.amax(dt[t_inds]))[0][0]
-                t_coords.append(tuple([t_inds[k][temp] for k in range(ndim)]))
+                # Get throat voxel positions in global coordinates
+                throat_voxels = np.array(vx).T  # Shape: (N_voxels, ndim)
+                throat_voxels_global = throat_voxels + s_offset
+                # Use periodic center of mass for throat coordinates
+                throat_center = _periodic_center_of_mass(throat_voxels_global, shape, periodic_axes)
+                t_coords.append(tuple(throat_center))
 
     # Convert to arrays
     p_coords = p_coords_cm
