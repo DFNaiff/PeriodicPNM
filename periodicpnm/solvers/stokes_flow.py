@@ -504,7 +504,6 @@ class StokesFlowSolver:
 
         # Body force contribution
         g = self._compute_body_force_projection()
-        print(g)
         g_vec = self.network['throat.total_length'] * g
 
         # Poiseuille flow: Q_j = ξ_j (g_j l_j - (A^T p)_j)

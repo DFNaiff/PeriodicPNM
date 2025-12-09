@@ -111,53 +111,37 @@ class TestPeriodicBoundaries:
         # Periodic axes should be set correctly (stored as tuple)
         assert solver.periodic_axes == (False, True)
 
-    def test_periodic_flow_direction_without_body_force_raises_error(self, simple_2d_geometry):
-        """Test that periodic flow direction without body force raises ValueError."""
-        # x-flow is periodic, but no body force
+    def test_periodic_flow_direction_x(self, simple_2d_geometry):
+        """Test periodic x-flow direction automatically uses body force."""
+        # x-flow is periodic - should automatically use body force from acceleration
         solver = LBMSolver(
             simple_2d_geometry,
             periodic_axes=(True, True),  # x is periodic (flow direction)
-            body_force=None,  # No body force!
+            acceleration=0.000001,
             device='cpu'
         )
-
-        # Should raise ValueError when trying to solve
-        with pytest.raises(ValueError, match="Flow direction.*is periodic.*no body_force specified"):
-            solver.solve_direction('x', max_iterations=10, verbose=False)
-
-    def test_periodic_flow_direction_with_body_force(self, simple_2d_geometry):
-        """Test periodic flow direction with body force works."""
-        # x-flow is periodic, with body force
-        solver = LBMSolver(
-            simple_2d_geometry,
-            periodic_axes=(True, True),  # x is periodic (flow direction)
-            body_force=[0.000001, 0],  # Body force in x
-            device='cpu'
-        )
-        # Should create without error
+        # Should create without error and solve automatically uses body force
         assert solver is not None
-        assert solver.body_force is not None
+        assert solver.periodic_axes == (True, True)
 
-    def test_y_flow_periodic_without_body_force_raises_error(self, simple_2d_geometry):
-        """Test that periodic y-flow direction without body force raises ValueError."""
-        # y-flow is periodic, but no body force
+    def test_periodic_flow_direction_y(self, simple_2d_geometry):
+        """Test periodic y-flow direction automatically uses body force."""
+        # y-flow is periodic - should automatically use body force from acceleration
         solver = LBMSolver(
             simple_2d_geometry,
             periodic_axes=(True, True),  # y is periodic (flow direction)
-            body_force=None,
+            acceleration=0.000001,
             device='cpu'
         )
-
-        # Should raise ValueError when trying to solve in y
-        with pytest.raises(ValueError, match="Flow direction.*is periodic.*no body_force specified"):
-            solver.solve_direction('y', max_iterations=10, verbose=False)
+        # Should create without error and solve automatically uses body force
+        assert solver is not None
+        assert solver.periodic_axes == (True, True)
 
     def test_fully_periodic_3d(self, simple_3d_geometry):
         """Test fully periodic 3D configuration."""
         solver = LBMSolver(
             simple_3d_geometry,
             periodic_axes=(True, True, True),
-            body_force=[0, 0, 0.000001],  # Force in z
             device='cpu'
         )
         assert solver is not None
@@ -165,47 +149,44 @@ class TestPeriodicBoundaries:
 
 
 @pytest.mark.skipif(not LETTUCE_AVAILABLE, reason="lettuce not installed")
-class TestBodyForces:
-    """Test body force (Guo forcing) functionality."""
+class TestAccelerationUsage:
+    """Test that acceleration is used for both body force and pressure drop."""
 
-    def test_scalar_body_force(self, simple_2d_geometry):
-        """Test scalar body force."""
+    def test_acceleration_periodic_2d(self, simple_2d_geometry):
+        """Test acceleration creates body force for periodic flow."""
         solver = LBMSolver(
             simple_2d_geometry,
-            body_force=0.000001,
+            periodic_axes=(True, True),  # Fully periodic uses body force
+            acceleration=0.000001,
             device='cpu'
         )
-        assert solver.body_force == 0.000001
+        # Acceleration should be used automatically for body force
+        assert solver is not None
+        assert solver.acceleration == 0.000001
 
-    def test_vector_body_force_2d(self, simple_2d_geometry):
-        """Test vector body force in 2D."""
-        body_force = [0.000001, 0.0]
+    def test_acceleration_non_periodic_2d(self, simple_2d_geometry):
+        """Test acceleration creates pressure drop for non-periodic flow."""
         solver = LBMSolver(
             simple_2d_geometry,
-            body_force=body_force,
+            periodic_axes=(False, False),  # Non-periodic uses pressure drop
+            acceleration=0.000001,
             device='cpu'
         )
-        assert solver.body_force == body_force
+        # Acceleration should be used automatically for pressure drop
+        assert solver is not None
+        assert solver.acceleration == 0.000001
 
-    def test_vector_body_force_3d(self, simple_3d_geometry):
-        """Test vector body force in 3D."""
-        body_force = [0, 0, 0.000001]
+    def test_acceleration_mixed_3d(self, simple_3d_geometry):
+        """Test acceleration with mixed periodicity in 3D."""
         solver = LBMSolver(
             simple_3d_geometry,
-            body_force=body_force,
+            periodic_axes=(False, True, True),  # x non-periodic, y,z periodic
+            acceleration=0.000001,
             device='cpu'
         )
-        assert solver.body_force == body_force
-
-    def test_gravity_force(self, simple_2d_geometry):
-        """Test gravity-like body force."""
-        gravity = [0, -9.81e-6]
-        solver = LBMSolver(
-            simple_2d_geometry,
-            body_force=gravity,
-            device='cpu'
-        )
-        assert solver.body_force == gravity
+        # Acceleration should work with mixed periodicity
+        assert solver is not None
+        assert solver.acceleration == 0.000001
 
 
 @pytest.mark.skipif(not LETTUCE_AVAILABLE, reason="lettuce not installed")
@@ -311,12 +292,10 @@ class TestFlowConfigurations:
         solver = LBMSolver(
             simple_2d_geometry,
             periodic_axes=(True, True),  # Both periodic
-            body_force=[0.000001, 0],  # MUST have body force
             device='cpu'
         )
         assert solver.periodic_axes == (True, True)
-        assert solver.body_force is not None
-        # Should be able to solve with body force
+        # Body force must be provided to solve_direction for periodic flow
 
     def test_mixed_configuration_3d(self, simple_3d_geometry):
         """Test mixed configuration in 3D."""
@@ -403,23 +382,6 @@ class TestErrorHandling:
                 periodic_axes=(True,),  # Only 1 element for 2D
                 device='cpu'
             )
-
-    def test_periodic_flow_without_force_error_message(self, simple_2d_geometry):
-        """Test error message for periodic flow without body force."""
-        solver = LBMSolver(
-            simple_2d_geometry,
-            periodic_axes=(True, True),
-            body_force=None,
-            device='cpu'
-        )
-
-        with pytest.raises(ValueError) as exc_info:
-            solver.solve_direction('x', max_iterations=10, verbose=False)
-
-        error_msg = str(exc_info.value)
-        assert "Flow direction" in error_msg
-        assert "periodic" in error_msg
-        assert "body_force" in error_msg
 
 
 if __name__ == "__main__":

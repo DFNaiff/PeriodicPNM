@@ -88,6 +88,80 @@ except ImportError:
 __all__ = ['LBMSolver', 'PressureDropBC', 'PorousMedium']
 
 
+def create_converter_from_tau(
+    tau,
+    voxel_size_m,
+    nu_phys_m2s,
+    mach_number=0.05
+):
+    """
+    Creates a UnitConversion object based on a fixed Tau and voxel size.
+
+    This effectively bypasses the Re/Ma initialization by calculating
+    what Re/Ma would have produced this specific Tau.
+
+    Parameters
+    ----------
+    tau : float
+        The relaxation time used in simulation (e.g., 1.0).
+    voxel_size_m : float
+        Physical size of one voxel (e.g., 1e-6 meters).
+    nu_phys_m2s : float
+        Physical kinematic viscosity (e.g., 1e-6 for water).
+    g_lattice : float, optional
+        The lattice acceleration used. If provided, helps estimate
+        characteristic velocity for scaling, but doesn't change units.
+
+    Returns
+    -------
+    lt.UnitConversion
+        A converter object configured to match your simulation.
+    """
+    # 1. Calculate Lattice Viscosity
+    # Formula: nu_lb = (tau - 0.5) / 3
+    cs_sq = 1.0 / 3.0
+    nu_lb = cs_sq * (tau - 0.5)
+
+    # 2. Derive the Time Step (dt)
+    # This is the "Bottom-Up" logic: Viscosity fixes the time scale.
+    # nu_phys = nu_lb * (dx^2 / dt)  ->  dt = (nu_lb / nu_phys) * dx^2
+    dx_phys = voxel_size_m
+    dt_phys = (nu_lb / nu_phys_m2s) * (dx_phys ** 2)
+
+    # 3. Define Characteristic Scales
+    # We can arbitrarily choose the characteristic lattice velocity to be
+    # something stable (e.g. 0.05) to satisfy the class's internal math.
+    # It doesn't change the physics, just the reference frame of the class.
+
+    # We set up the mach number
+    cs = np.sqrt(cs_sq)
+    u_lb_char = mach_number * cs
+
+    # Calculate what the physical velocity WOULD be for that dummy lattice velocity
+    # u_phys = u_lb * (dx / dt)
+    u_phys_char = u_lb_char * (dx_phys / dt_phys)
+
+    # Calculate the Reynolds number that links these two
+    # Re = (u_phys * L_phys) / nu_phys
+    L_lb_char = 1.0  # Characteristic length is 1 voxel
+    L_phys_char = dx_phys
+
+    re_calculated = (u_phys_char * L_phys_char) / nu_phys_m2s
+
+    # 4. Create the Converter
+    # Now we feed these back into the class. The class will do its math
+    # and arrive exactly back at the 'tau' and 'dt' we derived above.
+    converter = lt.UnitConversion(
+        reynolds_number=re_calculated,
+        mach_number=mach_number,
+        characteristic_length_pu=L_phys_char,
+        characteristic_velocity_pu=u_phys_char,
+        characteristic_length_lu=L_lb_char
+    )
+
+    return converter
+
+
 class PressureDropBC(lt.Boundary):
     """
     Pressure drop boundary condition for LBM simulations.
@@ -225,7 +299,7 @@ class PressureDropBC(lt.Boundary):
                                   if stencil_e[i, self.ind] == -self.direction[self.ind]]
 
         no_stream_mask = torch.zeros(size=f_shape, dtype=torch.bool,
-                                      device=context.device)
+                                     device=context.device)
         no_stream_mask[[inlet_stencil_indexes] + self.inlet_index] = 1
         no_stream_mask[[outlet_stencil_indexes] + self.outlet_index] = 1
         return no_stream_mask
@@ -270,9 +344,6 @@ class PorousMedium(lt.ExtFlow):
         For 2D: (periodic_x, periodic_y)
         For 3D: (periodic_x, periodic_y, periodic_z)
         Default: all False (walls on all sides perpendicular to flow)
-    acceleration : float or list[float], optional
-        Body force/acceleration vector. Can be scalar (applied in flow direction)
-        or vector. Used with Guo forcing scheme.
     """
 
     def __init__(self,
@@ -287,8 +358,7 @@ class PorousMedium(lt.ExtFlow):
                  equilibrium=None,
                  rho_drop=0.00001,
                  direction=None,
-                 periodic_axes=None,
-                 acceleration=None):
+                 periodic_axes=None):
         self.char_length_lu = 1.0
         self.char_length = char_length
         self.char_velocity = char_velocity
@@ -304,9 +374,6 @@ class PorousMedium(lt.ExtFlow):
             self.periodic_axes = list(periodic_axes)
             if len(self.periodic_axes) != len(self.resolution):
                 raise ValueError(f"periodic_axes must have {len(self.resolution)} elements")
-
-        # Store acceleration for body force
-        self.acceleration_vector = acceleration
 
         lt.ExtFlow.__init__(self, context, resolution, reynolds_number,
                             mach_number, stencil, equilibrium)
@@ -508,15 +575,15 @@ class LBMSolver:
     """
 
     def __init__(self,
-                 solid_geometry,
+                 pore_geometry,
                  grid_size_pu=2.25e-6,
-                 reynolds_number=0.1,
-                 mach_number=0.02,
-                 acceleration=0.000001,
+                 mach_number=0.05,
+                 tau=1.0,
+                 acceleration=None,
+                 acceleration_multiplier=1.0,
                  device='cuda:0',
                  dtype=torch.float32,
-                 periodic_axes=None,
-                 body_force=None):
+                 periodic_axes=None):
         """
         Initialize LBM solver.
 
@@ -531,7 +598,10 @@ class LBMSolver:
         mach_number : float
             Mach number
         acceleration : float
-            Forcing parameter for pressure drop BC
+            Acceleration/forcing parameter that drives the flow.
+            - For non-periodic directions: used to calculate pressure drop BC
+            - For periodic directions: used as body force magnitude
+            The solver automatically applies the appropriate method in solve_direction().
         device : str
             Device ('cuda:0', 'cpu', etc.)
         dtype : torch.dtype
@@ -539,13 +609,13 @@ class LBMSolver:
         periodic_axes : tuple of bool, optional
             Which axes are periodic. For 2D: (x, y), for 3D: (x, y, z)
             Default: all False (walls on all sides)
-        body_force : array_like, optional
-            Body force vector (e.g., gravity). Uses Guo forcing scheme.
-            If None, no body force applied.
         """
+        solid_geometry = ~pore_geometry
         if not _LETTUCE_IMPORTED:
             raise ImportError("Lettuce is not installed. Install with: pip install lettuce")
-
+        self.converter = create_converter_from_tau(tau, grid_size_pu, 1e-6, mach_number)
+        self.reynolds_number = self.converter.reynolds_number
+        self.mach_number = self.converter.mach_number
         # Store geometry
         self.geometry = np.asarray(solid_geometry, dtype=bool)
         self.ndim = self.geometry.ndim
@@ -555,9 +625,14 @@ class LBMSolver:
 
         # Store parameters
         self.grid_size_pu = grid_size_pu
-        self.reynolds_number = reynolds_number
-        self.mach_number = mach_number
-        self.acceleration = acceleration
+        if isinstance(acceleration, float):
+            self.acceleration = acceleration
+        else:
+            print("Estimating acceleration from mach number and characteristic velocity",
+                  f"and acceleration multiplier {acceleration_multiplier}")
+            self.acceleration = self.converter.characteristic_velocity_lu**2 / self.geometry.shape[0]
+            self.acceleration = self.acceleration * acceleration_multiplier
+            print(f"Acceleration: {self.acceleration}")
         self.device = torch.device(device)
         self.dtype = dtype
 
@@ -568,9 +643,6 @@ class LBMSolver:
             self.periodic_axes = tuple(periodic_axes)
             if len(self.periodic_axes) != self.ndim:
                 raise ValueError(f"periodic_axes must have {self.ndim} elements")
-
-        # Store body force
-        self.body_force = body_force
 
         # Initialize context
         self.context = lt.Context(self.device, use_native=False)
@@ -586,9 +658,9 @@ class LBMSolver:
         logger.info(f"  Stencil: {self.stencil.__class__.__name__}")
         logger.info(f"  Device: {self.device}")
         logger.info(f"  Periodic axes: {self.periodic_axes}")
-        if body_force is not None:
-            logger.info(f"  Body force: {body_force}")
 
+        # Fixed parameters
+        self.cs = 0.5773502691896258
         # Storage for results
         self.velocity_field = {}
         self.permeability = {}
@@ -648,15 +720,19 @@ class LBMSolver:
         return dir_vec, dir_name
 
     def solve_direction(self,
-                       direction,
-                       max_iterations=10000,
-                       check_interval=100,
-                       convergence_threshold=0.1,
-                       floating_avg_window=10,
-                       steps_per_check=20,
-                       verbose=True):
+                        direction,
+                        max_iterations=10000,
+                        check_interval=100,
+                        convergence_threshold=0.1,
+                        floating_avg_window=10,
+                        steps_per_check=20,
+                        verbose=True):
         """
         Solve flow in a specified direction.
+
+        The solver automatically uses self.acceleration to drive flow:
+        - For periodic directions: applies body force = acceleration
+        - For non-periodic directions: applies pressure drop based on acceleration
 
         Parameters
         ----------
@@ -693,22 +769,14 @@ class LBMSolver:
 
         flow_direction_is_periodic = self.periodic_axes[flow_axis] if flow_axis is not None else False
 
-        # If flow direction is periodic, body force MUST be specified
-        if flow_direction_is_periodic and self.body_force is None:
-            raise ValueError(
-                f"Flow direction {dir_name} (axis {flow_axis}) is periodic, but no body_force specified. "
-                f"Periodic flow direction requires body force to drive the flow. "
-                f"Either set periodic_axes[{flow_axis}]=False or provide body_force parameter."
-            )
-
         if flow_direction_is_periodic:
-            logger.info(f"  Flow direction is PERIODIC - driven by body force only (no pressure drop BC)")
+            logger.info(f"  Flow direction is PERIODIC - driven by body force (acceleration={self.acceleration})")
+            # For periodic: use body force, no pressure drop
+            rho_drop = None
         else:
-            logger.info(f"  Flow direction is NON-PERIODIC - using pressure drop BC")
-
-        # Calculate density drop (only used if not periodic in flow direction)
-        cs = 0.5773502691896258  # Speed of sound in lattice units
-        rho_drop = self.geometry.shape[0] / cs**2 * self.acceleration if not flow_direction_is_periodic else None
+            logger.info(f"  Flow direction is NON-PERIODIC - using pressure drop BC (acceleration={self.acceleration})")
+            # For non-periodic: use pressure drop, no body force
+            rho_drop = self.geometry.shape[flow_axis] / self.cs**2 * self.acceleration
 
         # Create flow object with periodic boundary support
         flow = PorousMedium(
@@ -720,25 +788,20 @@ class LBMSolver:
             stencil=self.stencil,
             rho_drop=rho_drop,
             direction=dir_vec,
-            periodic_axes=self.periodic_axes,
-            acceleration=self.body_force  # Pass body force to flow
+            periodic_axes=self.periodic_axes
         )
 
         # Set solid mask
         flow.mask = torch.tensor(self.geometry, device=self.device, dtype=torch.bool)
 
-        # Create Guo forcing if body force is specified
+        # Create Guo forcing if flow direction is periodic
         force = None
-        if self.body_force is not None:
-            # Convert body force to appropriate format
-            if np.isscalar(self.body_force):
-                # Scalar force: apply in flow direction
-                force_vec = [0.0] * self.ndim
-                for i, val in enumerate(dir_vec):
-                    if val != 0:
-                        force_vec[i] = self.body_force * val
-            else:
-                force_vec = self.body_force
+        if flow_direction_is_periodic:
+            # Use self.acceleration as body force in flow direction
+            force_vec = [0.0] * self.ndim
+            for i, val in enumerate(dir_vec):
+                if val != 0:
+                    force_vec[i] = self.acceleration * val
 
             logger.info(f"  Using Guo forcing: {force_vec}")
             force = lt.Guo(flow, flow.units.relaxation_parameter_lu, acceleration=force_vec)
@@ -798,6 +861,14 @@ class LBMSolver:
 
         return velocity_field
 
+    def get_posterior_reynolds_number(self, direction, characteristic_pore_size=None):
+        if characteristic_pore_size is None:
+            characteristic_pore_size = self.geometry.shape[0]
+        u_abs = self.get_velocity_magnitude(direction)
+        u_abs_max = u_abs.max()
+        reynolds_number = u_abs_max * characteristic_pore_size / self.converter.viscosity_lu
+        return reynolds_number
+        
     def _compute_permeability(self, dir_name, dir_vec):
         """
         Compute permeability from solved velocity field.
@@ -834,13 +905,18 @@ class LBMSolver:
         u_mean_surface = u_surface[flow_axis].mean()
         k_surface = (u_mean_surface / self.acceleration * flow.units.viscosity_lu).item()
 
+        k_bulk_pu = k_bulk * self.converter.characteristic_length_pu**2
+        k_surface_pu = k_surface * self.converter.characteristic_length_pu**2
+
         self.permeability[dir_name] = {
             'bulk': k_bulk,
-            'surface': k_surface
+            'surface': k_surface,
+            'bulk_pu': k_bulk_pu,
+            'surface_pu': k_surface_pu
         }
 
-        logger.info(f"Permeability ({dir_name}): bulk = {k_bulk:.3e} LU, "
-                   f"surface = {k_surface:.3e} LU")
+        logger.info(f"Permeability ({dir_name}): bulk = {k_bulk_pu:.3e} m², "
+                   f"surface = {k_surface_pu:.3e} m²")
 
     def solve_all_directions(self, **kwargs):
         """
@@ -911,9 +987,6 @@ class LBMSolver:
             raise RuntimeError(f"No permeability for direction {dir_name}. "
                              "Call solve_direction() first.")
 
-        if method not in ['bulk', 'surface']:
-            raise ValueError("method must be 'bulk' or 'surface'")
-
         return self.permeability[dir_name][method]
 
     def get_velocity_magnitude(self, direction):
@@ -953,17 +1026,51 @@ class LBMSolver:
 
         if dir_name not in self._flow:
             raise RuntimeError(f"No solution for direction {dir_name}. "
-                             "Call solve_direction() first.")
+                               "Call solve_direction() first.")
 
         flow = self._flow[dir_name]
-        cs = 0.5773502691896258  # Speed of sound
+        cs = self.cs  # Speed of sound
 
         # Get density and convert to pressure
         rho = flow.rho()
         pressure = rho * cs**2
 
-        # Convert to numpy
-        return self.context.convert_to_ndarray(pressure)
+        # Convert to numpy and squeeze extra dimensions
+        pressure_np = self.context.convert_to_ndarray(pressure)
+        return pressure_np.squeeze()
+
+    def get_pressure_fluctuation_field(self, direction):
+        """
+        Get pressure fluctuation field for a solved direction.
+
+        Pressure is computed from density: p = ρ * c_s²
+
+        Parameters
+        ----------
+        direction : str, int, or list
+            Direction specification
+
+        Returns
+        -------
+        pressure : ndarray
+            Pressure field in lattice units (shape)
+        """
+        _, dir_name = self._get_direction_vector(direction)
+
+        if dir_name not in self._flow:
+            raise RuntimeError(f"No solution for direction {dir_name}. "
+                               "Call solve_direction() first.")
+
+        flow = self._flow[dir_name]
+        cs = self.cs  # Speed of sound
+
+        # Get density and convert to pressure
+        rho = flow.rho()
+        pressure = (rho - 1.0) * cs**2
+
+        # Convert to numpy and squeeze extra dimensions
+        pressure_np = self.context.convert_to_ndarray(pressure)
+        return pressure_np.squeeze()
 
     def get_density_field(self, direction):
         """
@@ -988,8 +1095,29 @@ class LBMSolver:
         flow = self._flow[dir_name]
         rho = flow.rho()
 
-        # Convert to numpy
-        return self.context.convert_to_ndarray(rho)
+        # Convert to numpy and squeeze extra dimensions
+        rho_np = self.context.convert_to_ndarray(rho)
+        return rho_np.squeeze()
+
+    def get_density_fluctuation_field(self, direction):
+        """
+        Get density fluctuation field for a solved direction.
+
+        Parameters
+        ----------
+        direction : str, int, or list
+            Direction specification
+        """
+        _, dir_name = self._get_direction_vector(direction)
+        if dir_name not in self._flow:
+            raise RuntimeError(f"No solution for direction {dir_name}. "
+                               "Call solve_direction() first.")
+        flow = self._flow[dir_name]
+        rho = flow.rho()
+        rho = rho - 1.0
+        # Convert to numpy and squeeze extra dimensions
+        rho_np = self.context.convert_to_ndarray(rho)
+        return rho_np.squeeze()
 
     def get_mean_permeability(self, method='bulk'):
         """
@@ -1009,7 +1137,7 @@ class LBMSolver:
             raise RuntimeError("No permeability computed. Solve at least one direction first.")
 
         k_values = [self.permeability[dir_name][method]
-                   for dir_name in self.permeability.keys()]
+                    for dir_name in self.permeability.keys()]
 
         return np.mean(k_values)
 
@@ -1067,10 +1195,10 @@ class LBMSolver:
             raise RuntimeError(f"No solution for direction {dir_name}")
 
         flow = self._flow[dir_name]
-        cs = 0.5773502691896258  # Speed of sound
+        cs = self.cs  # Speed of sound
 
-        # Get basic fields
-        rho = self.context.convert_to_ndarray(flow.rho())
+        # Get basic fields and squeeze extra dimensions
+        rho = self.context.convert_to_ndarray(flow.rho()).squeeze()
         pressure = rho * cs**2
 
         fields = {

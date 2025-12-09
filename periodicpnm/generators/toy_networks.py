@@ -102,7 +102,7 @@ def create_linear_network(n_pores=5, spacing=10.0, diameter=2.0, periodic=False)
         Network dictionary containing:
         - 'pore.coords': Pore coordinates (n_pores × 3)
         - 'throat.conns': Throat connectivity (n_throats × 2)
-        - 'throat.diameter': Throat diameters (n_throats,)
+        - 'throat.equivalent_diameter': Throat diameters (n_throats,)
         - 'throat.length': Throat lengths (n_throats,)
         - 'throat.total_length': Total throat lengths (n_throats,)
         - 'throat.direct_length': Direct throat lengths (n_throats,)
@@ -168,7 +168,7 @@ def create_linear_network(n_pores=5, spacing=10.0, diameter=2.0, periodic=False)
     return {
         'pore.coords': coords,
         'throat.conns': conns,
-        'throat.diameter': diameters,
+        'throat.equivalent_diameter': diameters,
         'throat.length': lengths,
         'throat.total_length': lengths,
         'throat.direct_length': lengths,
@@ -249,7 +249,7 @@ def create_y_network(branch_length=10.0, diameter=2.0):
     return {
         'pore.coords': coords,
         'throat.conns': conns,
-        'throat.diameter': diameters,
+        'throat.equivalent_diameter': diameters,
         'throat.length': lengths,
         'throat.total_length': lengths,
         'throat.direct_length': lengths,
@@ -363,7 +363,7 @@ def create_diamond_network(side_length=10.0, diameter=2.0, periodic=False):
     return {
         'pore.coords': coords,
         'throat.conns': conns,
-        'throat.diameter': diameters,
+        'throat.equivalent_diameter': diameters,
         'throat.length': lengths,
         'throat.total_length': lengths,
         'throat.direct_length': lengths,
