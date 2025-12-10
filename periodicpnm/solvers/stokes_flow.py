@@ -542,89 +542,115 @@ class StokesFlowSolver:
             raise RuntimeError("Must solve flow first")
         return self.flow_rate.sum() / self.network['throat.total_length'].sum()
 
-    def compute_formation_factor(self, conductivity_fluid=1.0):
+    def compute_volume_averaged_velocity(self, total_volume=1.0):
         """
-        Compute electrical formation factor F = σ_fluid / σ_effective.
+        Compute volume-averaged velocity using pore-based velocity averaging.
 
-        The formation factor is computed by solving Laplace's equation
-        for electrical potential with the same network structure.
+        This method implements a volume-based averaging approach suitable for
+        periodic pore networks:
+
+        1. Compute throat velocity vectors: v_throat = Q * û / A
+        2. For each pore, compute area-weighted average velocity from adjacent throats
+        3. Volume-average over all pores: <u> = Σ(u_pore * V_pore) / V_total
+
+        The throat unit vectors already account for periodic boundary wrapping,
+        ensuring correct velocity directions even for throats crossing boundaries.
 
         Parameters
         ----------
-        conductivity_fluid : float, optional
-            Electrical conductivity of the fluid (S/m). Default is 1.0.
+        total_volume : float, optional
+            Total volume for averaging (m³). Default is 1.0, which effectively
+            returns the velocity integral ∫u dV rather than the average.
+            For proper averaging, provide the periodic domain volume (e.g., Lx*Ly*Lz).
 
         Returns
         -------
-        formation_factor : float
-            Dimensionless formation factor F >= 1
+        result : dict
+            Dictionary containing:
+            - 'average_velocity': ndarray, shape (3,)
+                Volume-averaged velocity vector [u_x, u_y, u_z] (m/s)
+                If total_volume=1.0, this is the velocity integral ∫u dV
+            - 'pore_velocities': ndarray, shape (Np, 3)
+                Area-weighted velocity at each pore (m/s)
+
+        Raises
+        ------
+        RuntimeError
+            If flow has not been solved yet
+        ValueError
+            If total_volume is not positive
 
         Notes
         -----
-        This uses the same network topology but with conductances proportional
-        to cross-sectional area (not r^4 as in Poiseuille flow).
+        This method is particularly designed for periodic networks where traditional
+        cross-sectional area definitions are ambiguous. By using EDT-based volume
+        partitioning (pores have volumes, throats are surfaces), we can perform
+        proper volume averaging.
+
+        The default total_volume=1.0 means the result is actually the integral
+        ∫u dV over all pore volumes. The user can then divide by the actual
+        domain volume or use it directly for permeability calculations.
+
+        Examples
+        --------
+        >>> # Get velocity integral (default)
+        >>> result = solver.compute_volume_averaged_velocity()
+        >>> velocity_integral = result['average_velocity']
+        >>>
+        >>> # Get proper average by providing total volume
+        >>> V_total = 50.0 * 50.0 * 50.0  # Domain dimensions
+        >>> result = solver.compute_volume_averaged_velocity(total_volume=V_total)
+        >>> average_velocity = result['average_velocity']
         """
-        raise NotImplementedError("Computing formation factor is not implemented yet")
-        if self.Nt == 0:
-            return np.inf
+        if self.flow_rate is None:
+            raise RuntimeError("Must solve flow first")
 
-        # Save current state
-        old_Xi = self.Xi.copy()
-        old_pressure = self.pressure
-        old_flow = self.flow_rate
-        old_body_force = self.body_force.copy()
+        if total_volume <= 0:
+            raise ValueError("total_volume must be positive")
 
-        # Compute electrical conductances: σ_j = σ_fluid * A_j / l_j
-        A_throat = np.pi * (self.network['throat.equivalent_diameter'] / 2)**2
-        l_throat = self.network['throat.total_length']
-        elec_conductance = conductivity_fluid * A_throat / l_throat
+        logger.info("Computing volume-averaged velocity")
 
-        # Temporarily replace conductances
-        self.Xi = sp.diags(elec_conductance, format='csr')
-        self.body_force = np.zeros(3)
+        # Step 1: Compute throat velocity vectors
+        unit_vectors = self.network['throat.unit_vector']  # Nt x 3
+        throat_areas = np.pi * (self.network['throat.equivalent_diameter'] / 2)**2  # Nt
 
-        # Solve with same BCs
-        logger.info("Computing formation factor (solving Laplace equation)")
-        self.solve()
+        # Velocity vector for each throat: v = Q * û / A
+        # This gives velocity magnitude and direction in physical units (m/s)
+        throat_velocities = (self.flow_rate[:, None] * unit_vectors) / throat_areas[:, None]  # Nt x 3
 
-        # Compute current flow
-        # throat_dirs = self.network['throat.unit_vector']
+        # Step 2: For each pore, compute area-weighted average velocity from adjacent throats
+        pore_velocities = np.zeros((self.Np, 3))
+        conns = self.network['throat.conns']
 
-        # Formation factor from Ohm's law analogy
-        # F = (theoretical conductance) / (actual conductance)
-        # Can be computed from voltage drop and current
+        for i in range(self.Np):
+            # Find adjacent throats (connected to pore i)
+            mask = (conns[:, 0] == i) | (conns[:, 1] == i)
+            adjacent_throats = np.where(mask)[0]
 
-        if len(self.bc_pores) >= 2:
-            delta_V = np.abs(self.bc_values.max() - self.bc_values.min())
-            total_current = np.sum(np.abs(self.flow_rate))  # Actually current in this context
+            if len(adjacent_throats) == 0:
+                logger.warning(f"Pore {i} has no adjacent throats (isolated)")
+                continue
 
-            # Estimate bulk conductance
-            coords = self.network['pore.coords']
-            extent = coords.max(axis=0) - coords.min(axis=0)
-            L = extent.max()  # Approximate length scale
-            A = np.prod(extent) / L  # Approximate area
+            # Get throat properties for adjacent throats
+            adj_areas = throat_areas[adjacent_throats]
+            adj_velocities = throat_velocities[adjacent_throats]  # shape: (n_adj, 3)
 
-            sigma_bulk = conductivity_fluid
-            G_bulk = sigma_bulk * A / L
+            # Area-weighted average: u_pore = Σ(v_throat * A_throat) / Σ(A_throat)
+            pore_velocities[i] = np.sum(adj_velocities * adj_areas[:, None], axis=0) / np.sum(adj_areas)
 
-            # Effective conductance
-            G_eff = total_current / delta_V if delta_V > 0 else 0
+        # Step 3: Volume-weighted average over all pores
+        pore_volumes = self.network['pore.volume']  # Np
 
-            # Formation factor
-            F = G_bulk / G_eff if G_eff > 0 else np.inf
-        else:
-            logger.warning("Need boundary conditions to compute formation factor")
-            F = np.inf
+        # <u> = Σ(u_pore * V_pore) / V_total
+        average_velocity = np.sum(pore_velocities * pore_volumes[:, None], axis=0) / total_volume  # shape: (3,)
 
-        # Restore state
-        self.Xi = old_Xi
-        self.pressure = old_pressure
-        self.flow_rate = old_flow
-        self.body_force = old_body_force
+        logger.info(f"Average velocity: [{average_velocity[0]:.3e}, "
+                    f"{average_velocity[1]:.3e}, {average_velocity[2]:.3e}] m/s")
 
-        logger.info(f"Formation factor: F = {F:.3f}")
-
-        return F
+        return {
+            'average_velocity': average_velocity,
+            'pore_velocities': pore_velocities
+        }
 
     def get_solution_fields(self):
         """
